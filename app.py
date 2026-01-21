@@ -1,44 +1,35 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import json
-from pathlib import Path
-from datetime import datetime
 import os
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+from dotenv import load_dotenv
+from datetime import datetime
+
+# Load environment variables (only needed locally)
+load_dotenv()
+
+# ---------- MONGODB SETUP ----------
+MONGO_URI = os.environ.get("MONGODB_URI")
+client = MongoClient(MONGO_URI)
+db = client.expense_tracker
+collection = db.expenses
 
 # ---------- APP SETUP ----------
 app = Flask(__name__)
 CORS(app)
 
-FILE = Path("expenses.json")
-
-# Ensure the expenses file exists
-if not FILE.exists():
-    FILE.write_text("[]")
-
-
 # ---------- HELPERS ----------
 
-def read_expenses():
-    """Read expenses from the JSON file."""
-    try:
-        return json.loads(FILE.read_text())
-    except json.JSONDecodeError:
-        return []
-
-
-def write_expenses(expenses):
-    """Write expenses to the JSON file with indentation."""
-    FILE.write_text(json.dumps(expenses, indent=2))
-
-
-def sort_by_date_desc(expenses):
-    """Sort expenses by date in descending order."""
-    return sorted(
-        expenses,
-        key=lambda e: datetime.strptime(e["date"], "%Y-%m-%d"),
-        reverse=True
-    )
-
+def serialize_expense(expense):
+    """Convert MongoDB document to JSON-friendly format."""
+    return {
+        "_id": str(expense["_id"]),
+        "amount": expense.get("amount"),
+        "date": expense.get("date"),
+        "category": expense.get("category", ""),
+        "description": expense.get("description", "")
+    }
 
 # ---------- ROUTES ----------
 
@@ -47,41 +38,37 @@ def home():
     """Root route for health check."""
     return jsonify({"message": "Expense Tracker Backend is running 🚀"}), 200
 
-
 @app.route("/expenses", methods=["GET", "POST"])
 def expenses():
     if request.method == "GET":
-        expenses_list = sort_by_date_desc(read_expenses())
-        write_expenses(expenses_list)
-        return jsonify(expenses_list), 200
+        # Fetch all expenses, sorted by date descending
+        expenses_list = list(collection.find())
+        expenses_list.sort(
+            key=lambda e: datetime.strptime(e["date"], "%Y-%m-%d"),
+            reverse=True
+        )
+        return jsonify([serialize_expense(e) for e in expenses_list]), 200
 
     elif request.method == "POST":
         new_expense = request.get_json()
         if not new_expense or "amount" not in new_expense or "date" not in new_expense:
             return jsonify({"error": "Invalid expense data"}), 400
 
-        expenses_list = read_expenses()
-        expenses_list.append(new_expense)
-        write_expenses(sort_by_date_desc(expenses_list))
+        result = collection.insert_one(new_expense)
+        new_expense["_id"] = str(result.inserted_id)
         return jsonify(new_expense), 201
 
+@app.route("/expenses/delete/<expense_id>", methods=["POST"])
+def delete_expense(expense_id):
+    try:
+        result = collection.delete_one({"_id": ObjectId(expense_id)})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Expense not found"}), 404
+        return jsonify({"success": True, "deleted_id": expense_id}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-@app.route("/expenses/delete/<int:index>", methods=["POST"])
-def delete_expense(index):
-    expenses_list = read_expenses()
-
-    if index < 0 or index >= len(expenses_list):
-        return jsonify({"error": "Invalid index"}), 400
-
-    deleted = expenses_list.pop(index)
-    write_expenses(expenses_list)
-    return jsonify({"success": True, "deleted": deleted}), 200
-
-
-# ---------- START ----------
-
-
+# ---------- START SERVER ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
