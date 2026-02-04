@@ -12,7 +12,13 @@ MONGO_URI = os.environ.get("MONGODB_URI")  # e.g., mongodb+srv://user:pass@clust
 
 # ---------- APP SETUP ----------
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",  # Allow all origins
+        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # ---------- DATABASE SETUP ----------
 client = MongoClient(MONGO_URI)
@@ -33,8 +39,12 @@ def serialize_expense(exp):
 def home():
     return jsonify({"message": "Expense Tracker Backend (MongoDB) is running 🚀"}), 200
 
-@app.route("/expenses", methods=["GET", "POST"])
+@app.route("/expenses", methods=["GET", "POST", "OPTIONS"])
 def expenses():
+    # Handle preflight CORS request - ADD THIS
+    if request.method == "OPTIONS":
+        return "", 204
+    
     if request.method == "GET":
         expenses_list = list(collection.find())
         # Sort newest first
@@ -59,8 +69,12 @@ def expenses():
         expense["_id"] = str(result.inserted_id)
         return jsonify(expense), 201
 
-@app.route("/expenses/delete/<expense_id>", methods=["POST", "DELETE"])
+@app.route("/expenses/delete/<expense_id>", methods=["POST", "DELETE", "OPTIONS"])
 def delete_expense(expense_id):
+    # Handle preflight CORS request - ADD THIS
+    if request.method == "OPTIONS":
+        return "", 204
+    
     result = collection.delete_one({"_id": ObjectId(expense_id)})
     if result.deleted_count == 0:
         return jsonify({"error": "Expense not found"}), 404
